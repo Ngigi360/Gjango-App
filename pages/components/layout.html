@@ -71,7 +71,8 @@
         <div class="col-lg-12 text-center">
           <!-- <p class="lead">You can naviagte the diff layers stored in the Database</p> -->
 
-          {{ my_map|safe }}
+          {% block content %}
+          {% endblock %}
 
           <footer
             class="container-fluid fixed-bottom bg-success text-center p-2 mt-5"
