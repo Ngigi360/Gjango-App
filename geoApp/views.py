@@ -6,7 +6,8 @@ import folium
 
 from .private import ENGINE_PROJECT
 
-
+ee.Authenticate()
+# ee.Initialize('francisngigi433')
 # Create your views here.
 def home(request: HttpRequest):
     shp_dir = os.path.join(os.getcwd(), "media", "shp")
@@ -105,108 +106,123 @@ def home(request: HttpRequest):
     context = {"my_map": m}
     return render(request, "geoApp/home.html", context)
 
+from django.shortcuts import render
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import ee
+import json
 
-def home_engine(request: HttpRequest):
-    # Authenticate and initialize the Earth Engine API
-    ee.Authenticate()
-    ee.Initialize(project=ENGINE_PROJECT)  # TODO: use your project name
+@csrf_exempt
+def home_engine(request):
+    return render(request, 'home-engine.html')
 
-    aoi = ee.Geometry.Polygon(
-        [
-            [37.27053144574261, -0.9875559427165509],
-            [37.65917280316449, -0.9875559427165509],
-            [37.65917280316449, -0.774721128627668],
-            [37.27053144574261, -0.774721128627668],
-            [37.27053144574261, -0.9875559427165509],
-        ]
-    )
+@csrf_exempt
+def analyze_roi(request):
+    if request.method == "POST":
+        ee.Authenticate()
+        ee.Initialize(project='ee-francisngigi433')
 
-    s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-    rgb_vis = {
-        "opacity": 1,
-        "bands": ["B4", "B3", "B2"],
-        "min": 392.63,
-        "max": 1694.87,
-        "gamma": 1,
-    }
+        # Extract ROI GeoJSON from POST request
+        aoi_geojson = request.POST.get('aoi')
+        try:
+            # Parse GeoJSON string into a Python dictionary
+            aoi_dict = json.loads(aoi_geojson)
+            # Convert the dictionary to Earth Engine Geometry
+            aoi = ee.Geometry(aoi_dict)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid GeoJSON format"}, status=400)
 
-    def maskS2clouds(image):
-        qa = image.select("QA60")
-        cloudBitMask = 1 << 10
-        cirrusBitMask = 1 << 11
-        mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
-        return image.updateMask(mask)
+        # Load and process the Sentinel-2 data
+        s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+        rgb_vis = {
+            "opacity": 1,
+            "bands": ["B4", "B3", "B2"],
+            "min": 392.63,
+            "max": 1694.87,
+            "gamma": 1,
+        }
 
-    dataset = (
-        s2.filterDate("2024-02-01", "2024-05-15")
-        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 23))
-        .filterBounds(aoi)
-        .map(lambda img: img.clip(aoi))
-        .map(maskS2clouds)
-    )
+        def maskS2clouds(image):
+            qa = image.select("QA60")
+            cloudBitMask = 1 << 10
+            cirrusBitMask = 1 << 11
+            mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
+            return image.updateMask(mask)
 
-    print(dataset.getInfo())
+        dataset = (
+            s2.filterDate("2024-02-01", "2024-05-15")
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 23))
+            .filterBounds(aoi)
+            .map(lambda img: img.clip(aoi))
+            .map(maskS2clouds)
+        )
 
-    required_bands = ["B4", "B3", "B2", "B8"]
-    dataset = dataset.median().select(required_bands)
+        # Extract the required bands
+        required_bands = ["B4", "B3", "B2", "B8"]
+        dataset = dataset.median().select(required_bands)
 
-    ndwi = dataset.normalizedDifference(["B3", "B8"]).rename("NDWI")
+        # Calculate NDWI (Normalized Difference Water Index)
+        ndwi = dataset.normalizedDifference(["B3", "B8"]).rename("NDWI")
 
-    waterThreshold = 0.3
-    waterMask = ndwi.gt(waterThreshold).selfMask()
+        # Threshold NDWI to create a binary water mask
+        waterThreshold = 0.3
+        waterMask = ndwi.gt(waterThreshold).selfMask()
 
-    floodArea = waterMask.multiply(ee.Image.pixelArea()).divide(
-        1e6
-    )  # in square kilometers
-    floodStats = floodArea.reduceRegion(
-        reducer=ee.Reducer.sum(), geometry=aoi, scale=10, maxPixels=1e9
-    )
-    print("Flooded Area (sq km):", floodStats.getInfo())
+        # Calculate flood extent
+        floodArea = waterMask.multiply(ee.Image.pixelArea()).divide(1e6)  # in square kilometers
+        floodStats = floodArea.reduceRegion(
+            reducer=ee.Reducer.sum(), geometry=aoi, scale=10, maxPixels=1e9
+        )
+        flood_area_sq_km = floodStats.getInfo().get("NDWI", 0)
 
-    population = (
-        ee.ImageCollection("WorldPop/GP/100m/pop")
-        .filterDate("2020-01-01", "2024-05-20")
-        .median()
-        .clip(aoi)
-    )
+        # Load population data
+        population = (
+            ee.ImageCollection("WorldPop/GP/100m/pop")
+            .filterDate("2020-01-01", "2024-05-20")
+            .median()
+            .clip(aoi)
+        )
 
-    exposedPopulation = population.updateMask(waterMask)
-    exposedPopStats = exposedPopulation.reduceRegion(
-        reducer=ee.Reducer.sum(), geometry=aoi, scale=100, maxPixels=1e9
-    )
-    print("Exposed Population:", exposedPopStats.getInfo())
+        # Calculate the number of exposed people
+        exposedPopulation = population.updateMask(waterMask)
+        exposedPopStats = exposedPopulation.reduceRegion(
+            reducer=ee.Reducer.sum(), geometry=aoi, scale=100, maxPixels=1e9
+        )
+        exposed_population = exposedPopStats.getInfo().get("population", 0)
 
-    def add_ee_layer(self, ee_image_object, vis_params, name):
-        map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
-        folium.raster_layers.TileLayer(
-            tiles=map_id_dict["tile_fetcher"].url_format,
-            attr="Google Earth Engine",
-            name=name,
-            overlay=True,
-            control=True,
-        ).add_to(self)
+        # Load Global Surface Water dataset for water level monitoring
+        gsw = ee.ImageCollection("JRC/GSW1_4/MonthlyHistory").filterBounds(aoi).filterDate("2021-01-01", "2024-06-01")
+        waterOccurrence = gsw.select("water").mean().clip(aoi)
 
-    folium.Map.add_ee_layer = add_ee_layer
+        # Check if the water occurrence dataset is empty
+        waterOccurrenceStats = waterOccurrence.reduceRegion(
+            reducer=ee.Reducer.count(), geometry=aoi, scale=30, maxPixels=1e9
+        ).getInfo()
+        water_occurrence_count = waterOccurrenceStats.get("water", 0)
 
-    map = folium.Map(location=[-0.881, 37.464], zoom_start=10)
+        # Calculate and display water level statistics
+        waterOccurrenceMeanStats = waterOccurrence.reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=aoi, scale=30, maxPixels=1e9
+        ).getInfo()
+        mean_water_level = waterOccurrenceMeanStats.get("water", None)
 
-    aoi_geojson = aoi.getInfo()
-    folium.GeoJson(aoi_geojson, name="AOI").add_to(map)
+        # Prepare the layers to be sent to the frontend
+        analysis_layers = {
+            "aoi": aoi_dict,
+            "water_occurrence": waterOccurrence.getMapId({'min': 0, 'max': 100, 'palette': ['white', 'blue']})['tile_fetcher'].url_format,
+            "ndwi": ndwi.getMapId({'min': -1, 'max': 1, 'palette': ['00FFFF', '0000FF']})['tile_fetcher'].url_format,
+            "water_mask": waterMask.getMapId({'palette': 'blue'})['tile_fetcher'].url_format,
+            "exposed_population": exposedPopulation.getMapId({'min': 0, 'max': 500, 'palette': ['red', 'yellow']})['tile_fetcher'].url_format,
+            "dataset_without_cloud": dataset.getMapId(rgb_vis)['tile_fetcher'].url_format,
+        }
 
-    map.add_ee_layer(dataset, rgb_vis, "Dataset (without cloud)")
-    map.add_ee_layer(
-        ndwi, {"min": -1, "max": 1, "palette": ["00FFFF", "0000FF"]}, "NDWI"
-    )
-    map.add_ee_layer(waterMask, {"palette": "blue"}, "Water Mask")
-    map.add_ee_layer(
-        exposedPopulation,
-        {"min": 0, "max": 500, "palette": ["red", "yellow"]},
-        "Exposed Population",
-    )
+        # Return the analysis results
+        return JsonResponse({
+            "flood_area_sq_km": flood_area_sq_km,
+            "exposed_population": exposed_population,
+            "mean_water_level": mean_water_level,
+            "water_occurrence_count": water_occurrence_count,
+            "analysis_layers": analysis_layers,
+        })
 
-    map.add_child(folium.LayerControl())
-
-    map.save("pages/home-engine.html")
-
-    # TODO: extract the html relevant portion of the saved html and populate the custom template
-    return render(request, "home-engine.html")
+    return JsonResponse({"error": "Invalid request method"}, status=400)
