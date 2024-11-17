@@ -106,8 +106,12 @@ def home(request: HttpRequest):
     context = {"my_map": m}
     return render(request, "geoApp/home.html", context)
 
+    
+
+
+
 from django.shortcuts import render
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import ee
 import json
@@ -132,7 +136,7 @@ def analyze_roi(request):
         except json.JSONDecodeError:
             return JsonResponse({"error": "Invalid GeoJSON format"}, status=400)
 
-        # Load and process the Sentinel-2 data
+        # Load and process Sentinel-2 data
         s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
         rgb_vis = {
             "opacity": 1,
@@ -142,6 +146,7 @@ def analyze_roi(request):
             "gamma": 1,
         }
 
+
         def maskS2clouds(image):
             qa = image.select("QA60")
             cloudBitMask = 1 << 10
@@ -150,12 +155,13 @@ def analyze_roi(request):
             return image.updateMask(mask)
 
         dataset = (
-            s2.filterDate("2024-02-01", "2024-05-15")
+            s2.filterDate("2024-03-01", "2024-05-30")
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 23))
             .filterBounds(aoi)
             .map(lambda img: img.clip(aoi))
             .map(maskS2clouds)
         )
+
 
         # Extract the required bands
         required_bands = ["B4", "B3", "B2", "B8"]
@@ -174,6 +180,7 @@ def analyze_roi(request):
             reducer=ee.Reducer.sum(), geometry=aoi, scale=10, maxPixels=1e9
         )
         flood_area_sq_km = floodStats.getInfo().get("NDWI", 0)
+        flood_area_sq_km = round(flood_area_sq_km, 2)
 
         # Load population data
         population = (
@@ -189,39 +196,46 @@ def analyze_roi(request):
             reducer=ee.Reducer.sum(), geometry=aoi, scale=100, maxPixels=1e9
         )
         exposed_population = exposedPopStats.getInfo().get("population", 0)
+        exposed_population = int(exposed_population)
 
         # Load Global Surface Water dataset for water level monitoring
-        gsw = ee.ImageCollection("JRC/GSW1_4/MonthlyHistory").filterBounds(aoi).filterDate("2021-01-01", "2024-06-01")
-        waterOccurrence = gsw.select("water").mean().clip(aoi)
+        gsw = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+        waterOccurrence = gsw.select('occurrence').clip(aoi)
 
-        # Check if the water occurrence dataset is empty
-        waterOccurrenceStats = waterOccurrence.reduceRegion(
-            reducer=ee.Reducer.count(), geometry=aoi, scale=30, maxPixels=1e9
-        ).getInfo()
-        water_occurrence_count = waterOccurrenceStats.get("water", 0)
+        # Calculate permanent water bodies
+        permanent_water = waterOccurrence.gt(80).selfMask()
 
-        # Calculate and display water level statistics
-        waterOccurrenceMeanStats = waterOccurrence.reduceRegion(
-            reducer=ee.Reducer.mean(), geometry=aoi, scale=30, maxPixels=1e9
-        ).getInfo()
-        mean_water_level = waterOccurrenceMeanStats.get("water", None)
+        # Compute distance to permanent water
+        distance = permanent_water.fastDistanceTransform().divide(30).clip(aoi).reproject('EPSG:4326', None, 30)
 
-        # Prepare the layers to be sent to the frontend
+        # Load elevation data (SRTM DEM)
+        srtm = ee.Image("USGS/SRTMGL1_003").clip(aoi).reproject('EPSG:4326', None, 30)
+        slope = ee.Terrain.slope(srtm)
+        velocity = slope.divide(10)
+        flow_time = distance.divide(velocity).mask(velocity.gt(0)).rename('FlowTime')
+
+        # Convert flow time to minutes
+        flow_time_minutes = flow_time.divide(60)
+
+        # Add layers to the analysis with correct scaling for DEM and Flow Time
         analysis_layers = {
             "aoi": aoi_dict,
             "water_occurrence": waterOccurrence.getMapId({'min': 0, 'max': 100, 'palette': ['white', 'blue']})['tile_fetcher'].url_format,
             "ndwi": ndwi.getMapId({'min': -1, 'max': 1, 'palette': ['00FFFF', '0000FF']})['tile_fetcher'].url_format,
-            "water_mask": waterMask.getMapId({'palette': 'blue'})['tile_fetcher'].url_format,
-            "exposed_population": exposedPopulation.getMapId({'min': 0, 'max': 500, 'palette': ['red', 'yellow']})['tile_fetcher'].url_format,
+            "population": population.getMapId({'min': 0.0016165449051186442, 'max': 10.273528099060059, 'palette': ['white', 'yellow', 'orange', 'red']})['tile_fetcher'].url_format,
             "dataset_without_cloud": dataset.getMapId(rgb_vis)['tile_fetcher'].url_format,
+            "permanent_water": permanent_water.getMapId({'palette': 'blue'})['tile_fetcher'].url_format,
+            "distance": distance.getMapId({'max': 500, 'min': 0, 'palette': ['blue', 'cyan', 'green', 'yellow', 'red']})['tile_fetcher'].url_format,
+            "elevation": srtm.getMapId({'min': 1000, 'max': 1500, 'palette': ['green', 'yellow', 'red']})['tile_fetcher'].url_format,
+            "slope": slope.getMapId({'min': 0, 'max': 22, 'palette': ['white', 'green', 'yellow', 'red']})['tile_fetcher'].url_format,
+            "flow_velocity": flow_time.getMapId({'min': 0, 'max': 6, 'palette': ['blue', 'cyan', 'yellow', 'red']})['tile_fetcher'].url_format,
+            "flow_time_minutes": flow_time_minutes.getMapId({'min': 0, 'max': 500, 'palette': ['blue', 'cyan', 'yellow', 'red']})['tile_fetcher'].url_format,
         }
 
         # Return the analysis results
         return JsonResponse({
             "flood_area_sq_km": flood_area_sq_km,
             "exposed_population": exposed_population,
-            "mean_water_level": mean_water_level,
-            "water_occurrence_count": water_occurrence_count,
             "analysis_layers": analysis_layers,
         })
 

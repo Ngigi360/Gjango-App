@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html>
 <head>
     <title>Monitoring System</title>
@@ -99,4 +99,118 @@
     </script>
 </body>
 </html> 
+ -->
 
+
+
+
+
+
+ <!DOCTYPE html>
+<html>
+<head>
+    <title>Monitoring System</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+</head>
+<body>
+    <div id="map_c1881b165021d14db17b6f95191e7a29" style="width: 100%; height: 600px;"></div>
+    <form id="aoiForm" method="POST" action="{% url 'analyze_roi' %}">
+        {% csrf_token %}
+        <input type="hidden" id="aoiInput" name="aoi" />
+        <button type="submit">Analyze ROI</button>
+    </form>
+    <div id="results"></div>
+
+    <script>
+        var map = L.map("map_c1881b165021d14db17b6f95191e7a29", {
+            center: [-0.881, 37.464],
+            crs: L.CRS.EPSG3857,
+            zoom: 12,
+            zoomControl: true,
+            preferCanvas: false,
+        });
+
+        var baseLayer = L.tileLayer(
+            "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            {"attribution": "&copy; OpenStreetMap contributors", "maxZoom": 19}
+        ).addTo(map);
+
+        var drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+
+        var drawControl = new L.Control.Draw({
+            draw: {
+                polygon: true,
+                polyline: false,
+                rectangle: false,
+                circle: false,
+                marker: false,
+            },
+            edit: {
+                featureGroup: drawnItems,
+                edit: false,
+                remove: false,
+            }
+        });
+        map.addControl(drawControl);
+
+        map.on(L.Draw.Event.CREATED, function (event) {
+            var layer = event.layer;
+            drawnItems.addLayer(layer);
+            document.getElementById('aoiInput').value = JSON.stringify(layer.toGeoJSON().geometry);
+        });
+
+        document.getElementById('aoiForm').onsubmit = function(event) {
+            event.preventDefault();
+            var formData = new FormData(this);
+            fetch(this.action, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('results').innerHTML = `
+                    <p>Exposed Population: ${data.exposed_population}</p>
+                    <p>Flood Area (sq km): ${data.flood_area_sq_km}</p>
+                `;
+                addAnalysisLayers(data.analysis_layers);
+            })
+            .catch(error => console.error('Error:', error));
+        };
+
+        var analysisLayers = {};
+
+        function addAnalysisLayers(layers) {
+            // Clear previous layers
+            drawnItems.clearLayers();
+            
+            if (layers.aoi) {
+                var aoiLayer = L.geoJSON(layers.aoi);
+                drawnItems.addLayer(aoiLayer);
+                analysisLayers["Region of Interest"] = aoiLayer;
+            }
+
+            // Add the 4 missing layers
+            analysisLayers["Water Occurrence"] = L.tileLayer(layers.water_occurrence, {"attribution": "Google Earth Engine"});
+            analysisLayers["NDWI"] = L.tileLayer(layers.ndwi, {"attribution": "Google Earth Engine"});
+            analysisLayers["flow_time_minutes"] = L.tileLayer(layers.flow_time_minutes, {"attribution": "Google Earth Engine"});
+            analysisLayers["distance"] = L.tileLayer(layers.distance, {"attribution": "Google Earth Engine"});
+            analysisLayers["Sentinel Data"] = L.tileLayer(layers.dataset_without_cloud, {"attribution": "Google Earth Engine"});
+            analysisLayers["DEM"] = L.tileLayer(layers.elevation, {"attribution": "Google Earth Engine"});
+            analysisLayers["Slope"] = L.tileLayer(layers.slope, {"attribution": "Google Earth Engine"});
+            analysisLayers["Flood Mask"] = L.tileLayer(layers.flood_mask, {"attribution": "Google Earth Engine"});
+            analysisLayers["Population"] = L.tileLayer(layers.population, {"attribution": "Google Earth Engine"});
+            analysisLayers["permanent_water"] = L.tileLayer(layers.permanent_water, {"attribution": "Google Earth Engine"});
+
+            // Add the layers control to the map
+            var layerControl = L.control.layers(null, analysisLayers, {"autoZIndex": true, "collapsed": true, "position": "topright"}).addTo(map);
+            for (var key in analysisLayers) {
+                analysisLayers[key].addTo(map);
+            }
+        }
+    </script>
+</body>
+</html>

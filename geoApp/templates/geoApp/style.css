@@ -1,0 +1,49 @@
+/* General Body and Text */
+body {
+    font-family: 'Arial', sans-serif;
+    background-color: #FFFFFF; /* White background */
+}
+
+/* Navbar Styles */
+.navbar {
+    background-color: #007849; /* Malawi Green for navigation bar */
+}
+
+.nav-link {
+    font-size: 1.1rem;
+}
+
+/* Sidebar Styles */
+.sidebar {
+    background-color: #000000; /* Black for sidebar */
+    color: #FFFFFF; /* White text */
+}
+
+h4 {
+    color: #007849; /* Malawi Green */
+}
+
+button {
+    background-color: #E30B0D; /* Red for action buttons */
+    color: white;
+    border: none;
+    padding: 10px;
+    cursor: pointer;
+}
+
+button:hover {
+    opacity: 0.8;
+}
+
+/* Footer Styles */
+footer {
+    background-color: #000000;
+    color: white;
+    padding: 10px;
+}
+
+/* Map Styles */
+#map {
+    height: 100%; /* Full height map */
+    width: 80%;
+}
