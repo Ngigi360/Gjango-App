@@ -118,7 +118,15 @@ import json
 
 @csrf_exempt
 def home_engine(request):
-    return render(request, 'home-engine.html')
+    return render(request, 'home-engine.html',{
+        "Senser1_Lat":-0.9353436795002926,
+        "Senser1_Long" :37.54556440748164,
+        "senser1Geofence": {"type":"Polygon","coordinates":[[[37.532464,-0.932339],[37.533579,-0.94607],[37.554599,-0.945812],[37.553659,-0.929163],[37.532464,-0.932339]]]},
+        "Senser2_Lat":-0.8429139763534353,
+        "Senser2_Long": 37.44225988243562,
+        "senser2Geofence": {"type":"Polygon","coordinates":[[[37.433852,-0.836992],[37.434882,-0.848321],[37.446807,-0.847634],[37.446807,-0.834933],[37.433852,-0.836992]]]},
+
+        })
 
 @csrf_exempt
 def analyze_roi(request):
@@ -130,7 +138,9 @@ def analyze_roi(request):
         aoi_geojson = request.POST.get('aoi')
         try:
             # Parse GeoJSON string into a Python dictionary
+            print(f"GeoGSON: {aoi_geojson}")
             aoi_dict = json.loads(aoi_geojson)
+            print(f"AOI Dict: {aoi_dict}")
             # Convert the dictionary to Earth Engine Geometry
             aoi = ee.Geometry(aoi_dict)
         except json.JSONDecodeError:
@@ -163,14 +173,11 @@ def analyze_roi(request):
         )
 
 
-        # Extract the required bands
         required_bands = ["B4", "B3", "B2", "B8"]
         dataset = dataset.median().select(required_bands)
 
-        # Calculate NDWI (Normalized Difference Water Index)
         ndwi = dataset.normalizedDifference(["B3", "B8"]).rename("NDWI")
 
-        # Threshold NDWI to create a binary water mask
         waterThreshold = 0.3
         waterMask = ndwi.gt(waterThreshold).selfMask()
 
@@ -182,7 +189,7 @@ def analyze_roi(request):
         flood_area_sq_km = floodStats.getInfo().get("NDWI", 0)
         flood_area_sq_km = round(flood_area_sq_km, 2)
 
-        # Load population data
+     
         population = (
             ee.ImageCollection("WorldPop/GP/100m/pop")
             .filterDate("2020-01-01", "2024-05-20")

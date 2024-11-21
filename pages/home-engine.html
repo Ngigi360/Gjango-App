@@ -6,13 +6,14 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+    <meta name="csrf-token" content="{{ csrf_token }}">
 </head>
 <body>
     <div id="map_c1881b165021d14db17b6f95191e7a29" style="width: 100%; height: 600px;"></div>
     <form id="aoiForm" method="POST" action="{% url 'analyze_roi' %}">
         {% csrf_token %}
         <input type="hidden" id="aoiInput" name="aoi" />
-        <button type="submit">Analyze ROI</button>
+        <button type="submit" id="btn_submit">Analyze ROI</button>
     </form>
     <div id="results"></div>
 
@@ -53,6 +54,7 @@
             var layer = event.layer;
             drawnItems.addLayer(layer);
             document.getElementById('aoiInput').value = JSON.stringify(layer.toGeoJSON().geometry);
+            console.log(JSON.stringify(layer.toGeoJSON().geometry))
         });
 
         document.getElementById('aoiForm').onsubmit = function(event) {
@@ -72,6 +74,58 @@
             })
             .catch(error => console.error('Error:', error));
         };
+
+        map.on('click', function(e) {
+            var lat = e.latlng.lat;
+            var lng = e.latlng.lng;
+
+            console.log("Clicked at: " + lat + ", " + lng);
+
+            L.marker([lat, lng]).addTo(map).bindPopup("Coordinates: " + lat + ", " + lng).openPopup();
+        });
+
+        // draw sense points
+        let p1Lat = "{{Senser1_Lat}}";
+        let p1Lng = "{{Senser1_Long}}";
+        let p2Lat = "{{Senser2_Lat}}";
+        let p2Lng = "{{Senser2_Long}}";
+        
+        console.log("Sensor", "{{Senser1_Lat}}", ">>", p1Lng);
+
+        let position1 = [p1Lat, p1Lng];
+        let position2 = [p2Lat, p2Lng];
+        
+        let marker1 = L.marker(position1, {
+            draggable:true // make the marker dragable throughout the tile
+        }).addTo(map);
+        // click event (do the AOI analysis)
+        marker1.on("click", function(e){
+            // submit the geofence to the engine
+            let p1GeoData = "{{senser1Geofence}}";
+            p1GeoData =  new DOMParser().parseFromString(p1GeoData, "text/html").documentElement.textContent;
+            console.log(p1GeoData);
+
+            // Click the submit button programatically to submit the form after filling the data 
+            p1GeoData = p1GeoData.split("'").join('"');
+            document.getElementById("aoiInput").value = p1GeoData;
+            document.getElementById("btn_submit").click();
+        })
+
+        let marker2 = L.marker(position2, {
+            draggable:true // make the marker dragable throughout the tile
+        }).addTo(map);
+        // click event (do the AOI analysis)
+        marker2.on("click", function(e){
+            // submit the geofence to the engine
+            let p2GeoData = "{{senser2Geofence}}";
+            p2GeoData =  new DOMParser().parseFromString(p2GeoData, "text/html").documentElement.textContent;
+            console.log(p2GeoData);
+
+            // Click the submit button programatically to submit the form after filling the data 
+            p2GeoData = p2GeoData.split("'").join('"');
+            document.getElementById("aoiInput").value = p2GeoData;
+            document.getElementById("btn_submit").click();
+        })
 
         var analysisLayers = {};
 
