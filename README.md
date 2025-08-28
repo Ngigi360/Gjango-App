@@ -1,0 +1,1 @@
+A remote sensing flood level monitoring system that uses Google Earth Engine (GEE) for data processing and analysis, and then visualizes outputs (like flood extent, affected population, or infrastructure) in a web-based Django application.
